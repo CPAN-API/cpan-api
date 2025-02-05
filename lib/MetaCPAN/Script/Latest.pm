@@ -260,17 +260,38 @@ sub reindex {
     my ( $self, $bulk, $source, $status ) = @_;
 
     # Update the status on the release.
-    my $release = $self->model->doc('release')->get( {
-        author => $source->{author},
-        name   => $source->{release},
+    my $releases = $self->es->search( {
+        es_doc_path('release'),
+        body => {
+            query => {
+                bool => {
+                    must => [
+                        { term => { author => $source->{author} } },
+                        { term => { name   => $source->{release} } },
+                    ],
+                },
+            },
+        },
+        _source => false,
     } );
+    my $release = $releases->{hits}{hits}[0]{_id};
 
-    $release->_set_status($status);
     log_info {
         $status eq 'latest' ? 'Upgrading ' : 'Downgrading ',
-            'release ', $release->name || q[];
+            'release ', $source->{release}, "($release)";
     };
-    $release->put unless ( $self->dry_run );
+
+    if ( !$self->dry_run ) {
+        $self->es->update( {
+            es_doc_path('release'),
+            id   => $release,
+            body => {
+                doc => {
+                    status => $status,
+                },
+            },
+        } );
+    }
 
     # Get all the files for the release.
     my $scroll = $self->es->scroll_helper(
